@@ -1,0 +1,31 @@
+# Virtual environment
+.venv/
+
+# Datasets
+data/
+
+# docs put for the AI agent to refer to
+docs/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Experiment outputs
+outputs/
+checkpoints/
+runs/
+
+# Model weights / caches
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Environment / secrets
+.env
+
+# IDE
+.vscode/
+.idea/
+.zed/
