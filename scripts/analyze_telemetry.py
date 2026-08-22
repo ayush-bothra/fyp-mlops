@@ -3,9 +3,9 @@ Exploratory Data Analysis (EDA) for IoT Telemetry Dataset.
 Inspects time-series structure, feature distributions, and predictability for GRU design.
 """
 
-from pathlib import Path 
+from pathlib import Path
+
 import pandas as pd
-import numpy as np
 
 CSV_PATH = Path("data/raw/iot_telemetry/FINAL IoT RL dataset 2026.csv")
 
@@ -26,7 +26,9 @@ def run_analysis() -> None:
     num_episodes = df["episode"].nunique()
     steps_per_ep = df.groupby("episode")["step"].count()
     print(f"Number of Episodes:       {num_episodes}")
-    print(f"Avg Steps per Episode:    {steps_per_ep.mean():.1f} (min={steps_per_ep.min()}, max={steps_per_ep.max()})")
+    print(
+        f"Avg Steps per Episode:    {steps_per_ep.mean():.1f} (min={steps_per_ep.min()}, max={steps_per_ep.max()})"
+    )
 
     df["dt"] = pd.to_datetime(df["timestamp"])
     time_deltas = df.groupby("episode")["dt"].diff().dt.total_seconds().dropna()
@@ -59,7 +61,11 @@ def run_analysis() -> None:
         "latency_ms",
     ]
     existing_features = [col for col in key_features if col in df.columns]
-    stats_df = df[existing_features].describe().T[["mean", "std", "min", "25%", "50%", "75%", "max"]]
+    stats_df = (
+        df[existing_features]
+        .describe()
+        .T[["mean", "std", "min", "25%", "50%", "75%", "max"]]
+    )
     print(stats_df.round(4).to_string())
     print()
 
@@ -70,14 +76,18 @@ def run_analysis() -> None:
     for col in ["battery_level", "cpu_usage", "temperature_C", "net_energy_mJ"]:
         if col in df.columns:
             lags = [df[col].autocorr(lag=i) for i in [1, 2, 3, 5]]
-            print(f"{col:<20} | Lag 1: {lags[0]:.3f} | Lag 2: {lags[1]:.3f} | Lag 3: {lags[2]:.3f} | Lag 5: {lags[3]:.3f}")
+            print(
+                f"{col:<20} | Lag 1: {lags[0]:.3f} | Lag 2: {lags[1]:.3f} | Lag 3: {lags[2]:.3f} | Lag 5: {lags[3]:.3f}"
+            )
     print()
 
     print("=" * 60)
     print("6. ACTION DISTRIBUTION")
     print("=" * 60)
     if "action_name" in df.columns:
-        print(df["action_name"].value_counts(normalize=True).mul(100).round(2).to_string())
+        print(
+            df["action_name"].value_counts(normalize=True).mul(100).round(2).to_string()
+        )
     print("=" * 60)
 
 

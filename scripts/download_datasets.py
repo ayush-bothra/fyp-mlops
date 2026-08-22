@@ -7,10 +7,11 @@ Datasets:
 """
 
 import argparse
-from pathlib import Path
 import shutil
 import urllib.request
 import zipfile
+from pathlib import Path
+
 import kagglehub
 
 RAW_DATA_DIR = Path("data/raw")
@@ -44,7 +45,7 @@ def download_core50() -> Path:
 
     zip_file_path = RAW_DATA_DIR / "core50_128x128.zip"
 
-    print(f"\n--- Downloading CORe50 Dataset from official source ---")
+    print("\n--- Downloading CORe50 Dataset from official source ---")
     print(f"URL: {CORE50_URL}")
     print(f"Saving to: {zip_file_path}")
 
@@ -52,7 +53,10 @@ def download_core50() -> Path:
         downloaded = block_num * block_size
         if total_size > 0:
             percent = downloaded / total_size * 100
-            print(f"\rDownloading: {percent:.1f}% ({downloaded / (1024 * 1024):.1f} MB / {total_size / (1024 * 1024):.1f} MB)", end="")
+            print(
+                f"\rDownloading: {percent:.1f}% ({downloaded / (1024 * 1024):.1f} MB / {total_size / (1024 * 1024):.1f} MB)",
+                end="",
+            )
         else:
             print(f"\rDownloaded: {downloaded / (1024 * 1024):.1f} MB", end="")
 

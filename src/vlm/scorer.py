@@ -6,21 +6,25 @@ incoming visual stream samples and estimate their learning value / informativene
 Supports INT8 (8-bit) quantization via bitsandbytes for reduced memory footprint on CUDA.
 """
 
+from __future__ import annotations
+
+import math
 from dataclasses import dataclass
 from pathlib import Path
-import math
+
 import torch
 from PIL import Image
-
-from transformers import AutoProcessor, AutoModelForVision2Seq, BitsAndBytesConfig
+from transformers import AutoModelForImageTextToText as AutoModelForVision2Seq
+from transformers import AutoProcessor, BitsAndBytesConfig
 
 
 @dataclass
 class SampleScore:
     """Represents the evaluation output for a single visual sample."""
+
     usefulness_score: float  # Normalized in [0.0, 1.0], higher = more informative/novel
-    confidence: float        # Mean top-1 confidence from token distribution
-    entropy: float           # Mean predictive entropy
+    confidence: float  # Mean top-1 confidence from token distribution
+    entropy: float  # Mean predictive entropy
     description: str | None = None
 
 
@@ -31,7 +35,9 @@ class VLMScorer:
     """
 
     DEFAULT_MODEL_ID: str = "HuggingFaceTB/SmolVLM-256M-Instruct"
-    DEFAULT_PROMPT: str = "<image>Describe the main object and its attributes in this image."
+    DEFAULT_PROMPT: str = (
+        "<image>Describe the main object and its attributes in this image."
+    )
 
     def __init__(
         self,
@@ -39,11 +45,11 @@ class VLMScorer:
         torch_dtype: torch.dtype | None = None,
         cache_dir: str | None = None,
         model_id: str = DEFAULT_MODEL_ID,
-        load_in_8bit: bool = True,
+        quantization: str = "4bit",
     ):
         self.model_id: str = model_id
         self.cache_dir: str | None = cache_dir
-
+        self.quantization: str = quantization.lower()
         if device is not None:
             self.device: torch.device = torch.device(device)
         elif torch.cuda.is_available():
@@ -54,17 +60,32 @@ class VLMScorer:
             self.device = torch.device("cpu")
 
         if torch_dtype is not None:
-            self.torch_dtype = torch_dtype
+            self.torch_dtype: torch.dtype = torch_dtype
         else:
-            self.torch_dtype = torch.float16 if self.device.type in ("cuda", "mps") else torch.float32
+            self.torch_dtype = (
+                torch.float16 if self.device.type in ("cuda", "mps") else torch.float32
+            )
 
         # Configure INT8 quantization (active on CUDA)
         quantization_config: BitsAndBytesConfig | None = None
-        if load_in_8bit and self.device.type == "cuda":
+        compute_dtype = (
+            torch.float16 if self.device.type in ("cuda", "mps") else torch.float32
+        )
+        if self.quantization == "4bit" and self.device.type == "cuda":
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=compute_dtype,
+            )
+            print(f"Loading VLM '{self.model_id}' in NF4 (4-bit) on {self.device}...")
+        elif self.quantization == "8bit" and self.device.type == "cuda":
             quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-            print(f"Loading VLM '{self.model_id}' in INT8 (8-bit) on {self.device}...")
+            print(f"Loading VLM '{self.model_id}' in 8-bit on {self.device}...")
         else:
-            print(f"Loading VLM '{self.model_id}' on {self.device} (dtype={self.torch_dtype})...")
+            print(
+                f"Loading VLM '{self.model_id}' on {self.device} (dtype={self.torch_dtype})..."
+            )
 
         self.processor = AutoProcessor.from_pretrained(
             self.model_id,
@@ -88,10 +109,7 @@ class VLMScorer:
     def _prepare_image(self, image_input: str | Path | Image.Image) -> Image.Image:
         if isinstance(image_input, (str, Path)):
             return Image.open(image_input).convert("RGB")
-        elif isinstance(image_input, Image.Image):
-            return image_input.convert("RGB")
-        else:
-            raise ValueError(f"Unsupported image type: {type(image_input)}")
+        return image_input.convert("RGB")
 
     def compute_usefulness(
         self,
@@ -118,12 +136,12 @@ class VLMScorer:
         inputs = self.processor(
             text=prompt_text,
             images=image,
-            return_tensors="pt"
+            return_tensors="pt",
         ).to(self.device)
 
         with torch.no_grad():
             outputs = self.model(**inputs)
-            logits = outputs.logits  # [batch_size, seq_len, vocab_size]
+            logits: torch.Tensor = outputs.logits  # [batch_size, seq_len, vocab_size]
 
             # Focus on the last token prediction logits for uncertainty calculation
             last_token_logits = logits[:, -1, :].float()
@@ -147,8 +165,12 @@ class VLMScorer:
 
             description = None
             if generate_text:
-                generated_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens)
-                description = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                generated_ids = self.model.generate(
+                    **inputs, max_new_tokens=max_new_tokens
+                )
+                description = self.processor.batch_decode(
+                    generated_ids, skip_special_tokens=True
+                )[0]
 
         return SampleScore(
             usefulness_score=usefulness,
@@ -170,18 +192,32 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Test VLM Scorer standalone.")
-    parser.add_argument("--image", type=str, default=None, help="Path to test image file")
-    parser.add_argument("--model-id", type=str, default=VLMScorer.DEFAULT_MODEL_ID, help="HF model ID")
-    parser.add_argument("--device", type=str, default=None, help="Device (cuda/cpu/mps)")
-    parser.add_argument("--no-8bit", action="store_true", help="Disable 8-bit quantization")
-    parser.add_argument("--generate-text", action="store_true", help="Generate text description")
+    parser.add_argument(
+        "--image", type=str, default=None, help="Path to test image file"
+    )
+    parser.add_argument(
+        "--model-id", type=str, default=VLMScorer.DEFAULT_MODEL_ID, help="HF model ID"
+    )
+    parser.add_argument(
+        "--device", type=str, default=None, help="Device (cuda/cpu/mps)"
+    )
+    parser.add_argument(
+        "--quantization",
+        type=str,
+        default="4bit",
+        choices=["4bit", "8bit", "none"],
+        help="quantization mode: 4bit (NF4), 8bit (INT8) or none",
+    )
+    parser.add_argument(
+        "--generate-text", action="store_true", help="Generate text description"
+    )
 
     args = parser.parse_args()
 
     scorer = VLMScorer(
         model_id=args.model_id,
         device=args.device,
-        load_in_8bit=not args.no_8bit,
+        quantization=args.quantization,
     )
 
     if args.image and Path(args.image).exists():
@@ -193,7 +229,9 @@ if __name__ == "__main__":
 
     result = scorer.compute_usefulness(test_img, generate_text=args.generate_text)
     print("\n--- Evaluation Result ---")
-    print(f"Usefulness Score: {result.usefulness_score} (0=redundant, 1=highly informative)")
+    print(
+        f"Usefulness Score: {result.usefulness_score} (0=redundant, 1=highly informative)"
+    )
     print(f"Confidence:       {result.confidence}")
     print(f"Entropy:          {result.entropy}")
     if result.description:

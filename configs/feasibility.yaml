@@ -1,0 +1,29 @@
+model:
+  id: HuggingFaceTB/SmolVLM-256M-Instruct
+
+dataset:
+  path: "data/raw/core50/core50_128x128"
+  object_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  train_session: 1
+  val_session: 3
+  num_train: 1000
+  num_val: 50
+  seed: 42
+
+qlora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  # target_modules is NOT read from here -- it's computed as a regex in
+  # src/vlm/loader.py (TEXT_ATTENTION_TARGET_REGEX), scoped specifically
+  # to model.text_model.layers.*.self_attn.{q_proj,v_proj} based on
+  # runtime introspection of the actual model tree. A plain
+  # ["q_proj","v_proj"] list here would be misleading, since PEFT
+  # suffix-matching would also hit the vision tower -- see loader.py
+  # docstring for the full explanation.
+  compute_dtype: float16
+
+training:
+  learning_rate: 1.0e-4
+  vram_fraction: 0.5         # simulates ~2GB on a 4GB 3050
+  device_index: 0
