@@ -236,6 +236,15 @@ def run_f2(config: dict, output_path: Path) -> dict:
         # 7. Validate on a DIFFERENT session (no leakage).
         result["validation_loss"] = round(evaluate_validation_loss(model, val_batches), 4)
 
+        # 8. Save the trained LoRA adapter to disk. F1 needs an actual
+        #    checkpoint to load -- without this, the trained weights are
+        #    discarded when this process exits.
+        adapter_output_dir = output_path.parent / "adapter" / output_path.stem
+        adapter_output_dir.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(str(adapter_output_dir))
+        processor.save_pretrained(str(adapter_output_dir))
+        result["adapter_path"] = str(adapter_output_dir.resolve())
+
         result["peak_vram_mb"] = round(torch.cuda.max_memory_allocated(training_cfg["device_index"]) / (1024 * 1024), 2)
         result["peak_vram_reserved_mb"] = round(torch.cuda.max_memory_reserved(training_cfg["device_index"]) / (1024 * 1024), 2)
         result["peak_ram_mb"] = round(get_peak_rss_mb(), 2)
