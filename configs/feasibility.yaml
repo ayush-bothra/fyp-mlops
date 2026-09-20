@@ -25,5 +25,6 @@ qlora:
 
 training:
   learning_rate: 1.0e-4
-  vram_fraction: 0.5         # simulates ~2GB on a 4GB 3050
+  vram_fraction: 0.2         # simulates ~2GB on a 4GB 3050
   device_index: 0
+  epochs: 3

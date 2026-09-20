@@ -6,17 +6,24 @@ Trains the model with validation checkpoints and evaluates on held-out test epis
 
 import argparse
 from pathlib import Path
+
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-from .dataset import INPUT_FEATURES, TARGET_FEATURES, load_and_preprocess_data, TelemetryScaler
+from .dataset import (
+    INPUT_FEATURES,
+    TARGET_FEATURES,
+    load_and_preprocess_data,
+)
 from .model import TelemetryGRU
 
 
-def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, dict[str, float]]:
+def calculate_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray
+) -> dict[str, dict[str, float]]:
     """Calculates MAE, RMSE, and R2 per target feature."""
     metrics: dict[str, dict[str, float]] = {}
     for idx, feature in enumerate(TARGET_FEATURES):
@@ -29,7 +36,11 @@ def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, dict[
         ss_res = np.sum((true_feat - pred_feat) ** 2)
         r2 = float(1.0 - (ss_res / (ss_tot + 1e-8)))
 
-        metrics[feature] = {"MAE": round(mae, 4), "RMSE": round(rmse, 4), "R2": round(r2, 4)}
+        metrics[feature] = {
+            "MAE": round(mae, 4),
+            "RMSE": round(rmse, 4),
+            "R2": round(r2, 4),
+        }
     return metrics
 
 
@@ -42,6 +53,8 @@ def train_and_evaluate(
     num_layers: int = 2,
     seq_len: int = 6,
     forecast_horizon: int = 3,
+    train_ratio: float = 0.8,
+    val_ratio: float = 0.1,
     save_dir: str | Path = "models",
     device: str | None = None,
 ) -> None:
@@ -65,6 +78,8 @@ def train_and_evaluate(
         seq_len=seq_len,
         forecast_horizon=forecast_horizon,
         batch_size=batch_size,
+        train_ratio=train_ratio, 
+        val_ratio=val_ratio
     )
 
     # Save scaler for future inference
@@ -127,7 +142,9 @@ def train_and_evaluate(
         else:
             saved_indicator = ""
 
-        print(f"Epoch [{epoch:02d}/{epochs:02d}] | Train MSE: {train_loss:.5f} | Val MSE: {val_loss:.5f}{saved_indicator}")
+        print(
+            f"Epoch [{epoch:02d}/{epochs:02d}] | Train MSE: {train_loss:.5f} | Val MSE: {val_loss:.5f}{saved_indicator}"
+        )
 
     print(f"\nTraining Complete. Best Validation Loss: {best_val_loss:.5f}")
 
@@ -164,15 +181,26 @@ def train_and_evaluate(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train and test GRU telemetry forecaster.")
-    parser.add_argument("--epochs", type=int, default=25, help="Number of training epochs")
+    parser = argparse.ArgumentParser(
+        description="Train and test GRU telemetry forecaster."
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=25, help="Number of training epochs"
+    )
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--hidden-dim", type=int, default=64, help="GRU hidden units")
     parser.add_argument("--num-layers", type=int, default=2, help="GRU layers")
-    parser.add_argument("--seq-len", type=int, default=6, help="Lookback sequence steps")
+    parser.add_argument(
+        "--seq-len", type=int, default=6, help="Lookback sequence steps"
+    )
     parser.add_argument("--horizon", type=int, default=3, help="Forecast horizon steps")
-    parser.add_argument("--save-dir", type=str, default="models", help="Directory to save model checkpoint")
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default="models",
+        help="Directory to save model checkpoint",
+    )
 
     args = parser.parse_args()
 

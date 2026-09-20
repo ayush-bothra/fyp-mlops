@@ -16,6 +16,24 @@ Fixes relative to the old benchmark_vlm_edge.py:
    chat-template scaffolding -- is masked with -100 so it doesn't
    contribute to the loss.
 
+Fixes relative to the first version of this file:
+
+3. initial_loss/final_loss used to be the loss on the first and last
+   training example only, not an aggregate. That told us almost nothing
+   about overall learning, only about whichever single sample happened
+   to be first or last in an unshuffled, class-grouped ordering.
+   TrainingRunResult now reports per-epoch mean loss instead.
+
+4. Training ran a single unshuffled pass over class-grouped data, which
+   biases the final weights toward whichever classes were trained last.
+   Training now runs multiple epochs with a freshly shuffled order each
+   epoch.
+
+5. Every image of a given class got the exact same caption string,
+   which makes it easy for the model to memorize a short fixed target
+   instead of learning visual features. Captions are now drawn from a
+   small set of equivalent phrasings.
+
 Boundary detection: SmolVLM's processor expands a single <image>
 placeholder into many tokens (patch-dependent), so the prompt's token
 length can't be predicted from text alone. We process the prompt-only
@@ -25,19 +43,28 @@ prompt+answer together and mask everything before that boundary.
 
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Iterator
 
 import torch
 from PIL import Image
 
 from src.data.core50 import Core50Sample
 
+CAPTION_TEMPLATES = [
+    "a photo of a {name}.",
+    "an image showing a {name}.",
+    "this is a {name}.",
+    "a picture of a {name}.",
+]
 
-def _caption_for_sample(sample: Core50Sample) -> str:
+
+def _caption_for_sample(sample: Core50Sample, rng: random.Random | None = None) -> str:
     readable_name = sample.category_name.replace("_", " ")
-    return f"a photo of a {readable_name}."
+    template = rng.choice(CAPTION_TEMPLATES) if rng is not None else CAPTION_TEMPLATES[0]
+    return template.format(name=readable_name)
 
 
 def build_supervised_example(
@@ -61,8 +88,6 @@ def build_supervised_example(
     ]
     prompt_text = processor.apply_chat_template(messages, add_generation_prompt=True)
 
-    # Process prompt-ALONE (but with the real image) to get the true
-    # expanded token length of the boundary we need to mask up to.
     prompt_only_inputs = processor(text=prompt_text, images=[image], return_tensors="pt")
     prompt_len = prompt_only_inputs["input_ids"].shape[1]
 
@@ -88,15 +113,28 @@ def build_supervised_example(
     return batch
 
 
+def _ordered_samples(
+    samples: list[Core50Sample], rng: random.Random, shuffle: bool
+) -> list[Core50Sample]:
+    if not shuffle:
+        return samples
+    ordered = list(samples)
+    rng.shuffle(ordered)
+    return ordered
+
+
 def prepare_supervised_batches(
     processor: Any,
     samples: list[Core50Sample],
     device: torch.device,
+    shuffle: bool = False,
+    seed: int = 42,
 ) -> list[dict[str, torch.Tensor]]:
+    rng = random.Random(seed)
     batches: list[dict[str, torch.Tensor]] = []
-    for sample in samples:
+    for sample in _ordered_samples(samples, rng, shuffle):
         image = Image.open(sample.path).convert("RGB")
-        caption = _caption_for_sample(sample)
+        caption = _caption_for_sample(sample, rng)
         batches.append(
             build_supervised_example(
                 processor=processor, image=image, caption=caption, device=device
@@ -104,17 +142,22 @@ def prepare_supervised_batches(
         )
     return batches
 
+
 def stream_supervised_batches(
     processor: Any,
     samples: list[Core50Sample],
     device: torch.device,
-):
-    for sample in samples:
+    shuffle: bool = False,
+    seed: int = 42,
+) -> Iterator[dict[str, torch.Tensor]]:
+    rng = random.Random(seed)
+    for sample in _ordered_samples(samples, rng, shuffle):
         image = Image.open(sample.path).convert("RGB")
-        caption = _caption_for_sample(sample)
+        caption = _caption_for_sample(sample, rng)
         yield build_supervised_example(
             processor=processor, image=image, caption=caption, device=device
         )
+
 
 def execute_training_step(
     model: Any,
@@ -122,7 +165,7 @@ def execute_training_step(
     batch_inputs: dict[str, torch.Tensor],
 ) -> float:
     optimizer.zero_grad()
-    outputs = model(**batch_inputs)  # labels already in batch_inputs -> HF computes loss
+    outputs = model(**batch_inputs)
     loss = outputs.loss
     if loss is None:
         raise RuntimeError(
@@ -137,17 +180,18 @@ def execute_training_step(
 
 @dataclass
 class TrainingRunResult:
+    epoch_losses: list[float]
     step_losses: list[float]
     step_times_seconds: list[float]
     train_seconds: float
 
     @property
     def initial_loss(self) -> float:
-        return self.step_losses[0] if self.step_losses else float("nan")
+        return self.epoch_losses[0] if self.epoch_losses else float("nan")
 
     @property
     def final_loss(self) -> float:
-        return self.step_losses[-1] if self.step_losses else float("nan")
+        return self.epoch_losses[-1] if self.epoch_losses else float("nan")
 
     @property
     def loss_reduction(self) -> float:
@@ -161,20 +205,28 @@ class TrainingRunResult:
 def run_training_loop(
     model: Any,
     optimizer: torch.optim.Optimizer,
-    batches: list[dict[str, torch.Tensor]],
+    batch_factory: Callable[[], Iterator[dict[str, torch.Tensor]]],
+    epochs: int = 1,
 ) -> TrainingRunResult:
+    epoch_losses: list[float] = []
     step_losses: list[float] = []
     step_times: list[float] = []
 
     start = time.perf_counter()
-    for batch in batches:
-        step_start = time.perf_counter()
-        loss_val = execute_training_step(model=model, optimizer=optimizer, batch_inputs=batch)
-        step_times.append(time.perf_counter() - step_start)
-        step_losses.append(loss_val)
+    for _ in range(epochs):
+        losses_this_epoch: list[float] = []
+        for batch in batch_factory():
+            step_start = time.perf_counter()
+            loss_val = execute_training_step(model=model, optimizer=optimizer, batch_inputs=batch)
+            step_times.append(time.perf_counter() - step_start)
+            step_losses.append(loss_val)
+            losses_this_epoch.append(loss_val)
+        epoch_mean = sum(losses_this_epoch) / len(losses_this_epoch) if losses_this_epoch else float("nan")
+        epoch_losses.append(epoch_mean)
     total_train_seconds = time.perf_counter() - start
 
     return TrainingRunResult(
+        epoch_losses=epoch_losses,
         step_losses=step_losses,
         step_times_seconds=step_times,
         train_seconds=total_train_seconds,
@@ -194,3 +246,21 @@ def evaluate_validation_loss(
             total_loss += float(outputs.loss.item())
     model.train()
     return total_loss / len(batches) if batches else float("nan")
+
+
+def evaluate_validation_loss_by_category(
+    model: Any,
+    batches: list[dict[str, torch.Tensor]],
+    categories: list[str],
+) -> dict[str, float]:
+    model.eval()
+    losses_by_category: dict[str, list[float]] = {}
+    with torch.no_grad():
+        for batch, category in zip(batches, categories):
+            outputs = model(**batch)
+            losses_by_category.setdefault(category, []).append(float(outputs.loss.item()))
+    model.train()
+    return {
+        category: sum(losses) / len(losses)
+        for category, losses in losses_by_category.items()
+    }

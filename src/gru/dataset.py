@@ -5,13 +5,14 @@ Extracts sliding-window sequences of physical edge metrics grouped strictly by e
 preventing cross-episode boundary leakage.
 """
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
-import json
+
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 INPUT_FEATURES: list[str] = [
     "battery_level",
@@ -34,6 +35,7 @@ TARGET_FEATURES: list[str] = [
 @dataclass
 class TelemetryScaler:
     """Standardizes input and target features using mean and standard deviation."""
+
     means: dict[str, float]
     stds: dict[str, float]
 
@@ -49,7 +51,9 @@ class TelemetryScaler:
             scaled[:, idx] = (df[feat].values - self.means[feat]) / self.stds[feat]
         return scaled
 
-    def inverse_transform_targets(self, array: np.ndarray, target_features: list[str]) -> np.ndarray:
+    def inverse_transform_targets(
+        self, array: np.ndarray, target_features: list[str]
+    ) -> np.ndarray:
         """Inverses target predictions back to original physical units."""
         orig = np.zeros_like(array)
         for idx, feat in enumerate(target_features):
@@ -107,12 +111,16 @@ def create_sequences_from_episodes(
 
         for i in range(len(scaled_matrix) - seq_len - forecast_horizon + 1):
             x_seq = scaled_matrix[i : i + seq_len]
-            y_seq = scaled_matrix[i + seq_len : i + seq_len + forecast_horizon, target_indices]
+            y_seq = scaled_matrix[
+                i + seq_len : i + seq_len + forecast_horizon, target_indices
+            ]
             x_list.append(x_seq)
             y_list.append(y_seq)
 
     if not x_list:
-        return np.empty((0, seq_len, len(input_features)), dtype=np.float32), np.empty((0, forecast_horizon, len(target_features)), dtype=np.float32)
+        return np.empty((0, seq_len, len(input_features)), dtype=np.float32), np.empty(
+            (0, forecast_horizon, len(target_features)), dtype=np.float32
+        )
 
     return np.array(x_list, dtype=np.float32), np.array(y_list, dtype=np.float32)
 
@@ -150,14 +158,28 @@ def load_and_preprocess_data(
     # Fit scaler on train split only
     scaler = TelemetryScaler.fit(train_df, INPUT_FEATURES)
 
-    x_train, y_train = create_sequences_from_episodes(train_df, scaler, seq_len=seq_len, forecast_horizon=forecast_horizon)
-    x_val, y_val = create_sequences_from_episodes(val_df, scaler, seq_len=seq_len, forecast_horizon=forecast_horizon)
-    x_test, y_test = create_sequences_from_episodes(test_df, scaler, seq_len=seq_len, forecast_horizon=forecast_horizon)
+    x_train, y_train = create_sequences_from_episodes(
+        train_df, scaler, seq_len=seq_len, forecast_horizon=forecast_horizon
+    )
+    x_val, y_val = create_sequences_from_episodes(
+        val_df, scaler, seq_len=seq_len, forecast_horizon=forecast_horizon
+    )
+    x_test, y_test = create_sequences_from_episodes(
+        test_df, scaler, seq_len=seq_len, forecast_horizon=forecast_horizon
+    )
 
-    print(f"Generated Sequences -> Train: {len(x_train):,}, Val: {len(x_val):,}, Test: {len(x_test):,}")
+    print(
+        f"Generated Sequences -> Train: {len(x_train):,}, Val: {len(x_val):,}, Test: {len(x_test):,}"
+    )
 
-    train_loader = DataLoader(TelemetryDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TelemetryDataset(x_val, y_val), batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(TelemetryDataset(x_test, y_test), batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(
+        TelemetryDataset(x_train, y_train), batch_size=batch_size, shuffle=True
+    )
+    val_loader = DataLoader(
+        TelemetryDataset(x_val, y_val), batch_size=batch_size, shuffle=False
+    )
+    test_loader = DataLoader(
+        TelemetryDataset(x_test, y_test), batch_size=batch_size, shuffle=False
+    )
 
     return train_loader, val_loader, test_loader, scaler

@@ -25,6 +25,7 @@ import torch
 
 from src.data.core50 import scan_core50
 from src.data.splits import select_deterministic_subset
+from src.telemetry.logger import TelemetryLogger
 from src.vlm.loader import audit_trainable_parameters, load_quantized_vlm_for_training
 from src.vlm.quantization import apply_vram_cap
 from src.vlm.training import (
@@ -34,6 +35,7 @@ from src.vlm.training import (
     prepare_supervised_batches,
     run_training_loop,
     stream_supervised_batches,
+    evaluate_validation_loss_by_category,
 )
 
 DEFAULT_CONFIG = {
@@ -48,7 +50,7 @@ DEFAULT_CONFIG = {
         "seed": 42,
     },
     "qlora": {"r": 8, "alpha": 16, "dropout": 0.05, "compute_dtype": "float16"},
-    "training": {"learning_rate": 1e-4, "vram_fraction": 0.5, "device_index": 0},
+    "training": {"learning_rate": 1e-4, "vram_fraction": 0.2, "device_index": 0},
 }
 
 
@@ -214,14 +216,19 @@ def run_f2(config: dict, output_path: Path) -> dict:
             "input_ids": list(peek_batch["input_ids"].shape),
         }
 
-        train_batches = stream_supervised_batches(processor, split.train, device)
+        train_batches = lambda: stream_supervised_batches(
+            processor, split.train, device, shuffle=True, seed=dataset_cfg["seed"]
+        )
         val_batches = prepare_supervised_batches(processor, split.val, device)
 
         trainable_params = [p for p in model.parameters() if p.requires_grad]
         optimizer = torch.optim.AdamW(trainable_params, lr=training_cfg["learning_rate"])
 
         # 6. Train.
-        train_result = run_training_loop(model, optimizer, train_batches)
+        with TelemetryLogger(output_path="results/telemetry/f2_run.csv", episode=output_path.stem):
+            train_result = run_training_loop(
+                model, optimizer, train_batches, epochs=training_cfg.get("epochs", 3)
+            )
         result["training_time_seconds"] = round(train_result.train_seconds, 3)
         result["time_per_step_seconds"] = round(train_result.avg_step_seconds, 4)
         result["throughput_samples_per_sec"] = (
@@ -235,6 +242,9 @@ def run_f2(config: dict, output_path: Path) -> dict:
 
         # 7. Validate on a DIFFERENT session (no leakage).
         result["validation_loss"] = round(evaluate_validation_loss(model, val_batches), 4)
+        result["validation_loss_by_category"] = evaluate_validation_loss_by_category(
+            model, val_batches, [s.category_name for s in split.val]
+        )
 
         # 8. Save the trained LoRA adapter to disk. F1 needs an actual
         #    checkpoint to load -- without this, the trained weights are

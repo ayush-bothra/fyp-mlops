@@ -3,8 +3,9 @@ PyTorch GRU Model Architecture for Edge Telemetry Forecasting.
 """
 
 from pathlib import Path
+
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class TelemetryGRU(nn.Module):
@@ -43,6 +44,22 @@ class TelemetryGRU(nn.Module):
             nn.Linear(hidden_dim // 2, output_dim * forecast_horizon),
         )
 
+    def predict_with_uncertainty(self, x: torch.Tensor, mc_samples: int = 20) -> tuple[torch.Tensor, torch.Tensor]:
+        was_training = self.training
+        self.train()
+
+        predictions = []
+        with torch.no_grad():
+            for _ in range(mc_samples):
+                predictions.append(self(x))
+
+        self.train(was_training)
+
+        stacked = torch.stack(predictions, dim=0)
+        mean = stacked.mean(dim=0)
+        std = stacked.std(dim=0)
+        return mean, std
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -75,7 +92,9 @@ class TelemetryGRU(nn.Module):
         )
 
     @classmethod
-    def load_checkpoint(cls, filepath: str | Path, device: torch.device | str = "cpu") -> "TelemetryGRU":
+    def load_checkpoint(
+        cls, filepath: str | Path, device: torch.device | str = "cpu"
+    ) -> "TelemetryGRU":
         checkpoint = torch.load(filepath, map_location=device)
         model = cls(**checkpoint["config"])
         model.load_state_dict(checkpoint["state_dict"])

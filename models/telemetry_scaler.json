@@ -1,0 +1,20 @@
+{
+  "means": {
+    "battery_level": 43.59512554797949,
+    "cpu_usage": 18.23434456928839,
+    "memory_usage": 52.93142322097379,
+    "temperature_C": 65.73408239700375,
+    "energy_consumed_mJ": 27130.291629368803,
+    "queue_size": 0.8786516853932584,
+    "latency_ms": 0.22247191011235956
+  },
+  "stds": {
+    "battery_level": 14.852776480591565,
+    "cpu_usage": 14.404885018323858,
+    "memory_usage": 4.480851137123016,
+    "temperature_C": 4.950909206709473,
+    "energy_consumed_mJ": 7013.905775594464,
+    "queue_size": 1.6225605065704294,
+    "latency_ms": 0.41598434795544
+  }
+}

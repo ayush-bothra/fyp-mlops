@@ -6,8 +6,8 @@ from .train import train_and_evaluate
 
 __all__ = [
     "TelemetryDataset",
+    "TelemetryGRU",
     "TelemetryScaler",
     "load_and_preprocess_data",
-    "TelemetryGRU",
     "train_and_evaluate",
 ]
